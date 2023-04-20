@@ -18,6 +18,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -44,7 +45,9 @@ func cancelOnInterrupt(cancel context.CancelFunc) {
 	}()
 }
 
-func runTest(db Database, df DatabaseFlavor, config *Config) {
+func runTest(db Database, df DatabaseFlavor, config *Config) map[string]*JobStats {
+	var testStats map[string]*JobStats
+
 	if len(config.Setup) > 0 {
 		log.Printf("Performing setup")
 		for _, query := range config.Setup {
@@ -61,11 +64,7 @@ func runTest(db Database, df DatabaseFlavor, config *Config) {
 		ctx, _ = context.WithTimeout(ctx, config.Duration)
 	}
 
-	testStats := processResults(config, makeJobResultChan(ctx, db, df, config.Jobs))
-
-	for name, stats := range testStats {
-		log.Printf("%s: %v", name, stats)
-	}
+	testStats = processResults(config, makeJobResultChan(ctx, db, df, config.Jobs))
 
 	if len(config.Teardown) > 0 {
 		log.Printf("Performing teardown")
@@ -75,6 +74,8 @@ func runTest(db Database, df DatabaseFlavor, config *Config) {
 			}
 		}
 	}
+
+	return testStats
 }
 
 var driverName = flag.String("driver", "mysql", "Database driver to use.")
@@ -83,6 +84,7 @@ var baseDir = flag.String("base-dir", "",
 var printVersion = flag.Bool("version", false, "Print the version and quit")
 
 var GlobalConfig ConnectionConfig
+var RunnerConfig ExecutionConfig
 
 func init() {
 	flag.StringVar(&GlobalConfig.Username, "username", "",
@@ -110,6 +112,7 @@ func init() {
 		}
 		return nil
 	})
+	flag.BoolVar(&RunnerConfig.JsonOutput, "json", false, "Returns test output in JSON format")
 }
 
 func main() {
@@ -153,6 +156,22 @@ func main() {
 		defer db.Close()
 
 		os.Chdir(*baseDir)
-		runTest(db, flavor, config)
+		results := runTest(db, flavor, config)
+
+		if RunnerConfig.JsonOutput {
+			resultsSummary := getJobsSummary(results)
+
+			jsonResult, err := json.MarshalIndent(resultsSummary, "", "	")
+			if err != nil {
+				log.Fatalf("marshalling results to JSON %v", err)
+			}
+
+			fmt.Println(string(jsonResult))
+		} else {
+			for name, stats := range results {
+				log.Printf("%s: %v", name, stats)
+			}
+		}
+
 	}
 }

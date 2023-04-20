@@ -21,6 +21,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -42,6 +43,23 @@ func init() {
 		"Log query specific stats to CSV file. <job name, start micros, elapsed micros, rows affected>")
 }
 
+type JobStatsSummary struct {
+	Transactions            int             `json:"transactions"`
+	TPS                     float64         `json:"transactionsPerSecond"`
+	TransactionLatency      time.Duration   `json:"transactionLatency"`
+	TransactionLatencyDelta time.Duration   `json:"transactionLatencyDelta"`
+	Rows                    int64           `json:"rows"`
+	RPS                     float64         `json:"rowsPerSecond"`
+	Queries                 uint64          `json:"queries"`
+	QPS                     float64         `json:"queriesPerSecond"`
+	TotalErrors             uint64          `json:"totalErrors"`
+	AcceptedErrors          uint64          `json:"acceptedErrors"`
+	ErrorLatency            time.Duration   `json:"errorLatency"`
+	ErrorLatencyDelta       time.Duration   `json:"errorLatencyDelta"`
+	Start                   time.Duration   `json:"start"`
+	Stop                    time.Duration   `json:"stop"`
+}
+
 type jobStats struct {
 	Transactions   StreamingStats
 	Errors         StreamingStats
@@ -57,6 +75,13 @@ type JobStats struct {
 	jobStats
 	Transactions StreamingHistogram
 	Errors       StreamingHistogram
+}
+
+/*
+ * The user specified parameters for runner options.
+ */
+ type ExecutionConfig struct {
+	JsonOutput   bool
 }
 
 func (js *jobStats) Update(config *Config, jr *JobResult) {
@@ -166,4 +191,37 @@ func processResults(config *Config, resultChan <-chan *JobResult) map[string]*Jo
 			recentTestStats = make(map[string]*jobStats)
 		}
 	}
+}
+
+func getJobsSummary(jobs map[string]*JobStats) map[string]*JobStatsSummary {
+	var jobsSummary = make(map[string]*JobStatsSummary)
+
+	for name, stats := range jobs {
+		jobStats := stats.jobStats
+
+		jobStatsSummary := &JobStatsSummary{
+			Transactions: jobStats.Transactions.Count(),
+			TransactionLatency: time.Duration(jobStats.Transactions.Mean()),
+			TransactionLatencyDelta: time.Duration(jobStats.Transactions.Confidence(*confidence)),
+			Rows: jobStats.RowsAffected,
+			Queries: jobStats.Queries,
+			TotalErrors: jobStats.TotalErrors,
+			AcceptedErrors: jobStats.AcceptedErrors,
+			ErrorLatency: time.Duration(jobStats.Errors.Mean()),
+			ErrorLatencyDelta: time.Duration(jobStats.Errors.Confidence(*confidence)),
+			Start: jobStats.Start,
+			Stop: jobStats.Stop,
+		}
+		
+		jobTime := stats.Stop.Seconds() - stats.Start.Seconds()
+		if math.Abs(jobTime) > 0.000001 {
+			jobStatsSummary.TPS = float64(jobStats.Transactions.Count())/jobTime
+			jobStatsSummary.RPS = float64(jobStats.RowsAffected)/jobTime
+			jobStatsSummary.QPS = float64(jobStats.Queries)/jobTime
+		}
+
+		jobsSummary[name] = jobStatsSummary
+	}
+
+	return jobsSummary
 }

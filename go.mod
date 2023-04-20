@@ -8,5 +8,5 @@ require (
 	github.com/go-sql-driver/mysql v1.5.0
 	github.com/lib/pq v1.7.0
 	github.com/vertica/vertica-sql-go v1.1.0
-	golang.org/x/net v0.0.0-20200707034311-ab3426394381
+	golang.org/x/crypto v0.0.0-20200622213623-75b288015ac9 // indirect
 )
