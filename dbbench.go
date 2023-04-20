@@ -22,6 +22,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"net/url"
 	"os"
@@ -122,6 +123,10 @@ func main() {
 		flag.PrintDefaults()
 	}
 
+	if RunnerConfig.JsonOutput {
+		log.SetOutput(ioutil.Discard)
+	}
+
 	if *printVersion {
 		fmt.Println("0.4")
 		return
@@ -159,6 +164,8 @@ func main() {
 		results := runTest(db, flavor, config)
 
 		if RunnerConfig.JsonOutput {
+			log.SetOutput(os.Stdout)
+
 			resultsSummary := getJobsSummary(results)
 
 			jsonResult, err := json.MarshalIndent(resultsSummary, "", "	")
