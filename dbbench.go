@@ -22,7 +22,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"net/url"
 	"os"
@@ -46,7 +45,27 @@ func cancelOnInterrupt(cancel context.CancelFunc) {
 	}()
 }
 
-func runTest(db Database, df DatabaseFlavor, config *Config) map[string]*JobStats {
+func writeStatsToFile(testStats map[string]*JobStats) {
+	resultsSummary := getJobsSummary(testStats)
+
+	// Create a file for writing
+	os.Chdir("..")
+    file, err := os.Create(fmt.Sprintf("%s.json", RunnerConfig.JsonOutputFile))
+    if err != nil {
+		log.Fatalf("creating output file %v", err)
+    }
+    defer file.Close()
+	
+    // Encode the JSON object and write it to the file
+    encoder := json.NewEncoder(file)
+	encoder.SetIndent("", "    ")
+    err = encoder.Encode(resultsSummary)
+    if err != nil {
+		log.Fatalf("writting output to file %v", err)
+    }
+}
+
+func runTest(db Database, df DatabaseFlavor, config *Config) {
 	var testStats map[string]*JobStats
 
 	if len(config.Setup) > 0 {
@@ -67,6 +86,14 @@ func runTest(db Database, df DatabaseFlavor, config *Config) map[string]*JobStat
 
 	testStats = processResults(config, makeJobResultChan(ctx, db, df, config.Jobs))
 
+	for name, stats := range testStats {
+		log.Printf("%s: %v", name, stats)
+	}
+
+	if len(RunnerConfig.JsonOutputFile) > 0 {
+		writeStatsToFile(testStats)
+	}
+
 	if len(config.Teardown) > 0 {
 		log.Printf("Performing teardown")
 		for _, query := range config.Teardown {
@@ -76,7 +103,6 @@ func runTest(db Database, df DatabaseFlavor, config *Config) map[string]*JobStat
 		}
 	}
 
-	return testStats
 }
 
 var driverName = flag.String("driver", "mysql", "Database driver to use.")
@@ -113,7 +139,7 @@ func init() {
 		}
 		return nil
 	})
-	flag.BoolVar(&RunnerConfig.JsonOutput, "json", false, "Returns test output in JSON format")
+	flag.StringVar(&RunnerConfig.JsonOutputFile, "json", "", "Saves test output statistics in a .json file with the provided name")
 }
 
 func main() {
@@ -121,10 +147,6 @@ func main() {
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "%s [options] <runfile.ini>\n", os.Args[0])
 		flag.PrintDefaults()
-	}
-
-	if RunnerConfig.JsonOutput {
-		log.SetOutput(ioutil.Discard)
 	}
 
 	if *printVersion {
@@ -161,24 +183,6 @@ func main() {
 		defer db.Close()
 
 		os.Chdir(*baseDir)
-		results := runTest(db, flavor, config)
-
-		if RunnerConfig.JsonOutput {
-			log.SetOutput(os.Stdout)
-
-			resultsSummary := getJobsSummary(results)
-
-			jsonResult, err := json.MarshalIndent(resultsSummary, "", "	")
-			if err != nil {
-				log.Fatalf("marshalling results to JSON %v", err)
-			}
-
-			fmt.Println(string(jsonResult))
-		} else {
-			for name, stats := range results {
-				log.Printf("%s: %v", name, stats)
-			}
-		}
-
+		runTest(db, flavor, config)
 	}
 }

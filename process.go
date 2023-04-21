@@ -81,7 +81,7 @@ type JobStats struct {
  * The user specified parameters for runner options.
  */
  type ExecutionConfig struct {
-	JsonOutput   bool
+	JsonOutputFile   string
 }
 
 func (js *jobStats) Update(config *Config, jr *JobResult) {
