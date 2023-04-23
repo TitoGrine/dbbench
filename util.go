@@ -19,6 +19,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
@@ -179,4 +180,8 @@ func maxUint64(vals []uint64) uint64 {
 		}
 	}
 	return m
+}
+
+func isJSONFile(filename string) bool {
+	return filepath.Ext(filename) == ".json"
 }
