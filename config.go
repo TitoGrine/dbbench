@@ -104,22 +104,22 @@ func decodeGlobalSection(df DatabaseFlavor, s goini.RawSection, c *Config) error
 }
 
 func validateGlobalSection(jsonConfig JSONConfig, c *Config) (err error) {
-v := reflect.ValueOf(jsonConfig)	
+	v := reflect.ValueOf(jsonConfig)
 
-if v.FieldByName("duration").IsValid() {
-	c.Duration, err = time.ParseDuration(jsonConfig.Duration)
-}
-
-if v.FieldByName("errors").IsValid() {
-	errors := jsonConfig.Errors
-	c.AcceptedErrors = make(Set)
-
-	for _, e := range errors {
-		c.AcceptedErrors.Add(e)
+	if v.FieldByName("duration").IsValid() {
+		c.Duration, err = time.ParseDuration(jsonConfig.Duration)
 	}
-}
 
-return err
+	if v.FieldByName("errors").IsValid() {
+		errors := jsonConfig.Errors
+		c.AcceptedErrors = make(Set)
+
+		for _, e := range errors {
+			c.AcceptedErrors.Add(e)
+		}
+	}
+
+	return err
 }
 
 type setupSectionParser struct {
@@ -128,9 +128,9 @@ type setupSectionParser struct {
 	basedir string
 }
 
-type SetupOptions struct {
-	Queries    []string `json:"queries,omitempty"`
-	QueryFiles []string `json:"queryFiles,omitempty"`
+type ReservedSectionOptions struct {
+	Queries     []string `json:"queries,omitempty"`
+	QueriesFile string   `json:"queriesFile,omitempty"`
 }
 
 var setupOptions = goini.DecodeOptionSet{
@@ -173,6 +173,51 @@ func decodeSetupSection(df DatabaseFlavor, s goini.RawSection, basedir string, s
 		*ss = parser.queries
 	}
 	return err
+}
+
+func validateReservedSection(df DatabaseFlavor, jsonConfig JSONConfig, basedir string, sectionName string, ss *[]string) (err error) {
+	v := reflect.ValueOf(jsonConfig)
+
+	if !v.FieldByName(sectionName).IsValid() {
+		return nil
+	} 
+
+	var section ReservedSectionOptions
+	switch sectionName {
+	case "setup":
+		section = jsonConfig.Setup
+	case "teardown":
+		section = jsonConfig.Teardown
+	}
+	v = reflect.ValueOf(section)
+
+	if v.FieldByName("queries").IsValid() {
+		queries := section.Queries
+
+		for _, query := range queries {
+			if err := df.CheckQuery(query); err != nil {
+				return err
+			}
+
+			*ss = append(*ss, query)
+		}
+	}
+
+	if v.FieldByName("queriesFile").IsValid() {
+		queriesFile := section.QueriesFile
+		if !filepath.IsAbs(queriesFile) {
+			queriesFile = filepath.Join(basedir, queriesFile)
+		}
+
+		queries, err := readQueriesFromFile(df, queriesFile)
+		if err != nil {
+			return err
+		}
+
+		*ss = append(*ss, queries...)
+	}
+
+	return nil
 }
 
 type jobParser struct {
@@ -429,18 +474,6 @@ func decodeConfigJobs(df DatabaseFlavor, iniConfig *goini.RawConfig, basedir str
 	return nil
 }
 
-func parseJSONConfig(df DatabaseFlavor, jsonConfig JSONConfig, basedir string) (*Config, error) {
-	var config = new(Config)
-
-	config.Flavor = df
-
-	if err := validateGlobalSection(jsonConfig, config); err != nil {
-	return nil, fmt.Errorf("Error parsing global section: %v", err)
-	}
-
-	return config, nil
-}
-
 func parseIniConfig(df DatabaseFlavor, iniConfig *goini.RawConfig, basedir string) (*Config, error) {
 	var config = new(Config)
 
@@ -473,11 +506,31 @@ func parseIniConfig(df DatabaseFlavor, iniConfig *goini.RawConfig, basedir strin
 }
 
 type JSONConfig struct {
-	Duration string                `json:"duration,omitempty"`
-	Errors   []string              `json:"error,omitempty"`
-	Setup    SetupOptions          `json:"setup,omitempty"`
-	Teardown SetupOptions          `json:"teardown,omitempty"`
-	Jobs     map[string]JobOptions `json:"jobs,omitempty"`
+	Duration string                 `json:"duration,omitempty"`
+	Errors   []string               `json:"error,omitempty"`
+	Setup    ReservedSectionOptions `json:"setup,omitempty"`
+	Teardown ReservedSectionOptions `json:"teardown,omitempty"`
+	Jobs     map[string]JobOptions  `json:"jobs,omitempty"`
+}
+
+func parseJSONConfig(df DatabaseFlavor, jsonConfig JSONConfig, basedir string) (*Config, error) {
+	var config = new(Config)
+
+	config.Flavor = df
+
+	if err := validateGlobalSection(jsonConfig, config); err != nil {
+		return nil, fmt.Errorf("Error parsing global section: %v", err)
+	}
+
+	if err := validateReservedSection(df, jsonConfig, basedir, "setup", &config.Setup); err != nil {
+		return nil, fmt.Errorf("Error parsing setup section: %v", err)
+	}
+
+	if err := validateReservedSection(df, jsonConfig, basedir, "teardown", &config.Teardown); err != nil {
+		return nil, fmt.Errorf("Error parsing teardown section: %v", err)
+	}
+
+	return config, nil
 }
 
 func parseConfig(df DatabaseFlavor, configFile string, baseDir string) (*Config, error) {
