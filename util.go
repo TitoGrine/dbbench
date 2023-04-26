@@ -185,3 +185,9 @@ func maxUint64(vals []uint64) uint64 {
 func isJSONFile(filename string) bool {
 	return filepath.Ext(filename) == ".json"
 }
+
+func isFieldSet(v reflect.Value, fieldName string) bool {
+	field := v.FieldByName(fieldName)
+
+	return field.IsValid() && !field.IsZero()
+}

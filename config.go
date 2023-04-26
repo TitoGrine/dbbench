@@ -106,11 +106,12 @@ func decodeGlobalSection(df DatabaseFlavor, s goini.RawSection, c *Config) error
 func validateGlobalSection(jsonConfig JSONConfig, c *Config) (err error) {
 	v := reflect.ValueOf(jsonConfig)
 
-	if v.FieldByName("duration").IsValid() {
-		c.Duration, err = time.ParseDuration(jsonConfig.Duration)
+	if isFieldSet(v, "Duration") {
+		if c.Duration, err = time.ParseDuration(jsonConfig.Duration); err != nil {
+			return err
+		}
 	}
-
-	if v.FieldByName("errors").IsValid() {
+	if isFieldSet(v, "Errors") {
 		errors := jsonConfig.Errors
 		c.AcceptedErrors = make(Set)
 
@@ -119,18 +120,13 @@ func validateGlobalSection(jsonConfig JSONConfig, c *Config) (err error) {
 		}
 	}
 
-	return err
+	return nil
 }
 
 type setupSectionParser struct {
 	queries []string
 	df      DatabaseFlavor
 	basedir string
-}
-
-type ReservedSectionOptions struct {
-	Queries     []string `json:"queries,omitempty"`
-	QueriesFile string   `json:"queriesFile,omitempty"`
 }
 
 var setupOptions = goini.DecodeOptionSet{
@@ -175,23 +171,28 @@ func decodeSetupSection(df DatabaseFlavor, s goini.RawSection, basedir string, s
 	return err
 }
 
+type ReservedSectionOptions struct {
+	Queries     []string `json:"queries,omitempty"`
+	QueryFiles  []string `json:"queryFiles,omitempty"`
+}
+
 func validateReservedSection(df DatabaseFlavor, jsonConfig JSONConfig, basedir string, sectionName string, ss *[]string) (err error) {
 	v := reflect.ValueOf(jsonConfig)
 
-	if !v.FieldByName(sectionName).IsValid() {
+	if !isFieldSet(v, sectionName) {
 		return nil
 	} 
 
 	var section ReservedSectionOptions
 	switch sectionName {
-	case "setup":
+	case "Setup":
 		section = jsonConfig.Setup
-	case "teardown":
+	case "Teardown":
 		section = jsonConfig.Teardown
 	}
 	v = reflect.ValueOf(section)
 
-	if v.FieldByName("queries").IsValid() {
+	if isFieldSet(v, "Queries") {
 		queries := section.Queries
 
 		for _, query := range queries {
@@ -202,19 +203,20 @@ func validateReservedSection(df DatabaseFlavor, jsonConfig JSONConfig, basedir s
 			*ss = append(*ss, query)
 		}
 	}
+	if isFieldSet(v, "QueryFiles") {
+		queryFiles := section.QueryFiles
 
-	if v.FieldByName("queriesFile").IsValid() {
-		queriesFile := section.QueriesFile
-		if !filepath.IsAbs(queriesFile) {
-			queriesFile = filepath.Join(basedir, queriesFile)
+		for _, queryFile := range queryFiles {
+			if !filepath.IsAbs(queryFile) {
+				queryFile = filepath.Join(basedir, queryFile)
+			}
+	
+			if queries, err := readQueriesFromFile(df, queryFile); err != nil {
+				return err
+			} else {
+				*ss = append(*ss, queries...)
+			}
 		}
-
-		queries, err := readQueriesFromFile(df, queriesFile)
-		if err != nil {
-			return err
-		}
-
-		*ss = append(*ss, queries...)
 	}
 
 	return nil
@@ -227,23 +229,6 @@ type jobParser struct {
 	queryArgsFile     io.Reader
 	queryArgsDelim    rune
 	multiQueryAllowed bool
-}
-
-type JobOptions struct {
-	Start            string   `json:"start,omitempty"`
-	Stop             string   `json:"stop,omitempty"`
-	Queries          []string `json:"queries,omitempty"`
-	QueryFiles       []string `json:"queryFiles,omitempty"`
-	QueryArgsFile    string   `json:"queryArgsFile,omitempty"`
-	QueryArgsDelim   string   `json:"queryArgsDelim,omitempty"`
-	QueryResultsFile string   `json:"queryResultsFile,omitempty"`
-	Rate             float64  `json:"rate,omitempty"`
-	BatchSize        uint     `json:"batchSize,omitempty"`
-	QueueDepth       uint     `json:"queueDepth,omitempty"`
-	Concurrency      uint     `json:"concurrency,omitempty"`
-	Count            uint     `json:"count,omitempty"`
-	MultiQueryMode   bool     `json:"multiQueryMode,omitempty"`
-	QueryLogFile     string   `json:"queryLogFile,omitempty"` 
 }
 
 var jobOptions = goini.DecodeOptionSet{
@@ -474,6 +459,203 @@ func decodeConfigJobs(df DatabaseFlavor, iniConfig *goini.RawConfig, basedir str
 	return nil
 }
 
+type JobOptions struct {
+	Start            string   `json:"start,omitempty"`
+	Stop             string   `json:"stop,omitempty"`
+	Queries          []string `json:"queries,omitempty"`
+	QueryFiles       []string `json:"queryFiles,omitempty"`
+	QueryArgsFile    string   `json:"queryArgsFile,omitempty"`
+	QueryArgsDelim   string   `json:"queryArgsDelim,omitempty"`
+	QueryResultsFile string   `json:"queryResultsFile,omitempty"`
+	Rate             float64  `json:"rate,omitempty"`
+	BatchSize        uint64   `json:"batchSize,omitempty"`
+	QueueDepth       uint64   `json:"queueDepth,omitempty"`
+	Concurrency      uint64   `json:"concurrency,omitempty"`
+	Count            uint64   `json:"count,omitempty"`
+	MultiQueryMode   bool     `json:"multiQueryMode,omitempty"`
+	QueryLogFile     string   `json:"queryLogFile,omitempty"` 
+}
+
+func validateJobSection(df DatabaseFlavor, jobSpec JobOptions , basedir string, job *Job) (err error) {
+	jp := jobParser{j: job, df: df, basedir: basedir}
+	v := reflect.ValueOf(jobSpec)
+
+	if isFieldSet(v, "Start") {
+		if job.Start, err = time.ParseDuration(jobSpec.Start); err != nil {
+			return err
+		}
+	}
+	if isFieldSet(v, "Stop") {
+		if job.Stop, err = time.ParseDuration(jobSpec.Stop); err != nil {
+			return err
+		}
+	}
+	if isFieldSet(v, "Queries") {
+		queries := jobSpec.Queries
+
+		for _, query := range queries {
+			if err := df.CheckQuery(query); err != nil {
+				return err
+			}
+
+			job.Queries = append(job.Queries, query)
+		}
+	}
+	if isFieldSet(v, "QueryFiles") {
+		queryFiles := jobSpec.QueryFiles
+
+		for _, queryFile := range queryFiles {
+			if !filepath.IsAbs(queryFile) {
+				queryFile = filepath.Join(basedir, queryFile)
+			}
+	
+			if queries, err := readQueriesFromFile(df, queryFile); err != nil {
+				return err
+			} else {
+				job.Queries = append(job.Queries, queries...)
+			}
+		}
+	}
+	if isFieldSet(v, "QueryArgsFile") {
+		queryArgsFile := jobSpec.QueryArgsFile
+		if !filepath.IsAbs(queryArgsFile) {
+			queryArgsFile = filepath.Join(basedir, queryArgsFile)
+		}
+
+		if jp.queryArgsFile, err = os.Open(queryArgsFile); err != nil {
+			return err
+		}
+	}
+	if isFieldSet(v, "QueryArgsDelim") {
+		queryArgsDelim := jobSpec.QueryArgsDelim
+
+		if len(queryArgsDelim) != 1 {
+			return errors.New("Must provide exactly one character for delimiter")
+		}
+
+		jp.queryArgsDelim, _ = utf8.DecodeRuneInString(queryArgsDelim)
+	}
+	if isFieldSet(v, "QueryResultsFile") {
+		queryResultsFile := jobSpec.QueryResultsFile
+		if !filepath.IsAbs(queryResultsFile) {
+			queryResultsFile = filepath.Join(basedir, queryResultsFile)
+		}
+
+		if job.QueryResults, err = NewSafeCSVWriter(queryResultsFile); err != nil {
+			return err
+		}
+	}
+	if isFieldSet(v, "Rate") {
+		if jobSpec.Rate < 0 {
+			return errors.New("invalid negative value for rate")
+		}
+
+		job.Rate = jobSpec.Rate
+	}
+	if isFieldSet(v, "BatchSize") {
+		job.BatchSize = jobSpec.BatchSize
+	}
+	if isFieldSet(v, "QueueDepth") {
+		job.QueueDepth = jobSpec.QueueDepth
+	}
+	if isFieldSet(v, "Concurrency") {
+		job.QueueDepth = jobSpec.Concurrency
+	}
+	if isFieldSet(v, "Count") {
+		job.Count = jobSpec.Count
+	}
+	if isFieldSet(v, "MultiQueryMode") {
+		jp.multiQueryAllowed = jobSpec.MultiQueryMode
+	}
+	if isFieldSet(v, "QueryLogFile") {
+		queryLogFile := jobSpec.QueryLogFile
+		if !filepath.IsAbs(queryLogFile) {
+			queryLogFile = filepath.Join(basedir, queryLogFile)
+		}
+
+		if job.QueryLog, err = os.Open(queryLogFile); err != nil {
+			return err
+		}
+	}
+
+	if len(job.Queries) == 0 && job.QueryLog == nil {
+		return errors.New("no query provided")
+	}
+	if len(job.Queries) > 0 && job.QueryLog != nil {
+		return errors.New("cannot have both queries and a queryLog")
+	}
+	if len(job.Queries) > 1 && !jp.multiQueryAllowed {
+		return fmt.Errorf("must have only one query")
+	}
+	if job.Rate == 0 && job.BatchSize > 0 {
+		return errors.New("can only specify batchSize with rate")
+	}
+	if jp.queryArgsDelim != 0 && jp.queryArgsFile == nil {
+		return errors.New("Cannot set queryArgsDelim with no queryArgsFile")
+	}
+	if jp.queryArgsFile != nil && job.QueryLog != nil {
+		return errors.New("Cannot use queryArgsFile with queryLogFile")
+	}
+
+	differentJobTypes := 0
+	if job.QueueDepth > 0 {
+		differentJobTypes += 1
+	}
+	if job.QueryLog != nil {
+		differentJobTypes += 1
+	}
+	if job.Rate > 0 {
+		differentJobTypes += 1
+	}
+	// The default job type is 1 thread.
+	if differentJobTypes == 0 {
+		job.QueueDepth = 1
+	} else if differentJobTypes > 1 {
+		return errors.New("Can only specify one of rate, queue-depth, or query-log-file")
+	}
+
+	if job.Rate > 0 && job.BatchSize == 0 {
+		job.BatchSize = 1
+	}
+
+	if jp.queryArgsFile != nil {
+		job.QueryArgs = csv.NewReader(jp.queryArgsFile)
+		if jp.queryArgsDelim != 0 {
+			job.QueryArgs.Comma = jp.queryArgsDelim
+		}
+	}
+
+	return nil
+}
+
+func validateConfigJobs(df DatabaseFlavor, jsonConfig JSONConfig, basedir string, c *Config) (err error) {
+	c.Jobs = make(map[string]*Job)
+
+	v := reflect.ValueOf(jsonConfig)
+
+	if !isFieldSet(v, "Jobs") {
+		return nil
+	}
+
+	jobs := jsonConfig.Jobs
+	for name, jobSpec := range jobs {
+		// Don't try to parse a reserved section as a job.
+		if name == "setup" || name == "teardown" || name == "global" {
+			continue
+		}
+
+		job := new(Job)
+		job.Name = name
+		if err := validateJobSection(df, jobSpec, basedir, job); err != nil {
+			return fmt.Errorf("Error parsing job %s: %v",
+				strconv.Quote(name), err)
+		}
+		c.Jobs[name] = job
+	}
+
+	return nil
+}
+
 func parseIniConfig(df DatabaseFlavor, iniConfig *goini.RawConfig, basedir string) (*Config, error) {
 	var config = new(Config)
 
@@ -521,13 +703,24 @@ func parseJSONConfig(df DatabaseFlavor, jsonConfig JSONConfig, basedir string) (
 	if err := validateGlobalSection(jsonConfig, config); err != nil {
 		return nil, fmt.Errorf("Error parsing global section: %v", err)
 	}
-
-	if err := validateReservedSection(df, jsonConfig, basedir, "setup", &config.Setup); err != nil {
+	if err := validateReservedSection(df, jsonConfig, basedir, "Setup", &config.Setup); err != nil {
 		return nil, fmt.Errorf("Error parsing setup section: %v", err)
 	}
-
-	if err := validateReservedSection(df, jsonConfig, basedir, "teardown", &config.Teardown); err != nil {
+	if err := validateReservedSection(df, jsonConfig, basedir, "Teardown", &config.Teardown); err != nil {
 		return nil, fmt.Errorf("Error parsing teardown section: %v", err)
+	}
+	if err := validateConfigJobs(df, jsonConfig, basedir, config); err != nil {
+		return nil, err
+	}
+
+	for name, job := range config.Jobs {
+		if config.Duration > 0 && job.Start > config.Duration {
+			return nil, fmt.Errorf("job %s starts after test finishes.",
+				strconv.Quote(name))
+		} else if job.Stop > 0 && config.Duration > 0 && job.Stop > config.Duration {
+			return nil, fmt.Errorf("job %s stops after test finishes.",
+				strconv.Quote(name))
+		}
 	}
 
 	return config, nil
@@ -549,7 +742,10 @@ func parseConfig(df DatabaseFlavor, configFile string, baseDir string) (*Config,
 		return parseJSONConfig(df, jsonConfig, baseDir)
 	} else {
 		cp := goini.NewRawConfigParser()
-		cp.ParseFile(configFile)
+		err := cp.ParseFile(configFile)
+		if err != nil {
+			return nil, err
+		}
 		iniConfig, err := cp.Finish()
 		if err != nil {
 			return nil, err
